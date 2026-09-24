@@ -458,9 +458,26 @@ def run_routing_script_with_search():
         line_layer.setRenderer(renderer)
 
         QgsProject.instance().addMapLayer(line_layer)
+        
+        route_extent = line_layer.extent()
 
-        iface.mapCanvas().setExtent(line_layer.extent())
+        if route_extent.isNull() or (route_extent.width() == 0 and route_extent.height() == 0):
+            print("Peringatan: extent rute tidak valid/degenerate, fallback zoom ke titik user.")
+            iface.mapCanvas().setCenter(user_pt_local)
+            iface.mapCanvas().zoomScale(1500)
+        else:
+            route_extent.scale(1.2)
+            canvas_crs = iface.mapCanvas().mapSettings().destinationCrs()
+            if canvas_crs != line_layer.crs():
+                transform_extent = QgsCoordinateTransform(line_layer.crs(), canvas_crs, QgsProject.instance())
+                try:
+                    route_extent = transform_extent.transformBoundingBox(route_extent)
+                except Exception as e:
+                    print(f"Peringatan: gagal transform extent ke CRS kanvas ({e}), pakai extent asli.")
+            iface.mapCanvas().setExtent(route_extent)
+
         iface.mapCanvas().refresh()
+        QApplication.processEvents()
 
         QMessageBox.information(parent, "Sukses", f"Ditemukan {len(new_features)} jalur rute (mengikuti jaringan tiang) yang port-nya tersedia.")
     else:
