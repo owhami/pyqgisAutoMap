@@ -12,6 +12,7 @@ from qgis.utils import iface
 from PyQt5.QtWidgets import QApplication, QInputDialog, QMessageBox
 from PyQt5.QtCore import QVariant
 
+
 def _cari_svg_camp():
     """Cari file SVG bawaan QGIS yang namanya mengandung kata 'camp'
     (mis. simbol tenda/perkemahan di library topo). Return path lengkap
@@ -32,9 +33,10 @@ def _cari_svg_camp():
 
     if not kandidat:
         return None
-
+    
     kandidat.sort(key=lambda p: len(os.path.basename(p)))
     return kandidat[0]
+
 
 def run_routing_script_with_search():
     user_layer_name = 'tbUser'
@@ -43,7 +45,7 @@ def run_routing_script_with_search():
 
     RADIUS_TIANG_M = 500   
     MAX_SPAN_M = 80        
-    MAX_DROP_M = 250       
+    MAX_DROP_M = 500       
     K_TETANGGA = 5         
 
     parent = iface.mainWindow() if iface else None
@@ -110,6 +112,7 @@ def run_routing_script_with_search():
             print("Tidak ada data user valid di layer tbUser.")
             return
 
+        # Pop-up Search User
         search_text, ok = QInputDialog.getText(
             parent, "Cari User", "Ketik idUser (atau sebagian namanya):"
         )
@@ -169,7 +172,7 @@ def run_routing_script_with_search():
         )
         selected_user = nama_input.strip() if (ok2 and nama_input.strip()) else f"Titik_{lat:.6f}_{lon:.6f}"
 
-        user_pt_wgs = QgsPointXY(lon, lat)  
+        user_pt_wgs = QgsPointXY(lon, lat)
 
         transform_from_wgs84 = QgsCoordinateTransform(crs_wgs84, local_crs, QgsProject.instance())
         user_geom_local = QgsGeometry.fromPointXY(user_pt_wgs)
@@ -177,6 +180,7 @@ def run_routing_script_with_search():
         user_pt_local = user_geom_local.asPoint()
 
     print(f"\n--- MEMULAI PENCARIAN UNTUK: {selected_user} ---")
+
     d_wgs = QgsDistanceArea()
     d_wgs.setSourceCrs(crs_wgs84, QgsProject.instance().transformContext())
     d_wgs.setEllipsoid('WGS84')
@@ -206,7 +210,7 @@ def run_routing_script_with_search():
         camp_svg_path = _cari_svg_camp()
         if camp_svg_path:
             svg_symbol_layer = QgsSvgMarkerSymbolLayer(camp_svg_path)
-            svg_symbol_layer.setSize(12)
+            svg_symbol_layer.setSize(6)
             marker_symbol = QgsMarkerSymbol()
             marker_symbol.changeSymbolLayer(0, svg_symbol_layer)
             print(f"Simbol 'camp' ditemukan: {camp_svg_path}")
@@ -214,7 +218,7 @@ def run_routing_script_with_search():
             marker_symbol = QgsMarkerSymbol.createSimple({
                 'name': 'star',
                 'color': '255,140,0,255',
-                'size': '12'
+                'size': '4'
             })
             print("Peringatan: SVG simbol 'camp' tidak ditemukan di library QGIS, memakai simbol bintang oranye sebagai gantinya.")
 
@@ -235,11 +239,18 @@ def run_routing_script_with_search():
             continue
 
         try:
-            idle_val = int(f['usedSPLT'])
+            capacity_val = int(f['capacityPort'])
         except (ValueError, TypeError, KeyError):
-            idle_val = 8
+            capacity_val = 8  
 
-        if idle_val >= 8:
+        try:
+            used_val = int(f['idleUser'])
+        except (ValueError, TypeError, KeyError):
+            used_val = 0
+
+        sisa_port = capacity_val - used_val
+
+        if sisa_port <= 0:
             continue
 
         fat_pt_local = f.geometry().asPoint()
@@ -256,13 +267,15 @@ def run_routing_script_with_search():
             'name': idFAT,
             'point_wgs': fat_pt_wgs,
             'point_local': fat_pt_local,
-            'idle': idle_val,
+            'capacity': capacity_val,
+            'used': used_val,
+            'idle': sisa_port,
             'olt': nama_olt,
             'koordinat': koordinat_teks
         })
 
     if not fat_data:
-        pesan = f"Tidak ada FAT dengan port tersedia (usedSPLT < 8) di layer '{fat_layer_name}'. Tidak bisa membuat rute untuk '{selected_user}'."
+        pesan = f"Tidak ada FAT dengan port tersedia (capacityPort - idleUser > 0) di layer '{fat_layer_name}'. Tidak bisa membuat rute untuk '{selected_user}'."
         print(pesan)
         QMessageBox.warning(parent, "Tidak Ada FAT", pesan)
         return
@@ -371,7 +384,9 @@ def run_routing_script_with_search():
     provider.addAttributes([
         QgsField("idUser", QVariant.String),
         QgsField("idFAT", QVariant.String),
-        QgsField("usedSPLT", QVariant.Int),
+        QgsField("capacityPort", QVariant.Int),
+        QgsField("idleUser", QVariant.Int),
+        QgsField("sisaPort", QVariant.Int),
         QgsField("idOLT", QVariant.String),
         QgsField("koordinatFAT", QVariant.String),
         QgsField("jarak_jalan_m", QVariant.Double),
@@ -387,7 +402,8 @@ def run_routing_script_with_search():
         if straight_dist > 500:
             continue
 
-        print(f"Menguji FAT: {fat['name']} [Sisa Port: {fat['idle']}] (Jarak Lurus: {round(straight_dist, 2)}m) ... ", end="")
+        print(f"Menguji FAT: {fat['name']} [Kapasitas: {fat['capacity']}, Terpakai: {fat['used']}, Sisa: {fat['idle']}] "
+              f"(Jarak Lurus: {round(straight_dist, 2)}m) ... ", end="")
 
         pole_user, drop_user = nearest_pole(user_pt_wgs, MAX_DROP_M)
         pole_fat, drop_fat = nearest_pole(fat['point_wgs'], MAX_DROP_M)
@@ -421,8 +437,8 @@ def run_routing_script_with_search():
         new_feat = QgsFeature(line_layer.fields())
         new_feat.setGeometry(route_geom)
         new_feat.setAttributes([
-            str(selected_user), str(fat['name']), int(fat['idle']), str(fat['olt']),
-            str(fat['koordinat']), float(round(total_dist, 2)), int(len(path_ids))
+            str(selected_user), str(fat['name']), int(fat['capacity']), int(fat['used']), int(fat['idle']),
+            str(fat['olt']), str(fat['koordinat']), float(round(total_dist, 2)), int(len(path_ids))
         ])
         new_features.append(new_feat)
 
@@ -455,5 +471,6 @@ def run_routing_script_with_search():
         QMessageBox.information(parent, "Selesai", "Tidak ada rute FAT via jaringan tiang dalam radius 500m.")
 
     print("=== END ===")
+
 
 run_routing_script_with_search()
