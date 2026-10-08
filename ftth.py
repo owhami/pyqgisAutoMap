@@ -377,7 +377,7 @@ def run_routing_script_with_search():
                 best_dist = dist
         return best, best_dist
 
-    layer_name = f"Rute_{selected_user}_Tiang"
+    layer_name = f"Rute_{selected_user}"
     line_layer = QgsVectorLayer(f"LineString?crs={local_crs.authid()}", layer_name, "memory")
     provider = line_layer.dataProvider()
 
